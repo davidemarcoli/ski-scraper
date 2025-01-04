@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "ski-scraper"
+version = "0.1.0"
+description = ""
+authors = ["davidemarcoli <davide@marcoli.ch>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115.6"
+uvicorn = "^0.34.0"
+beautifulsoup4 = "^4.12.3"
+requests = "^2.32.3"
+pandas = "^2.2.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
