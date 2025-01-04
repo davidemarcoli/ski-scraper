@@ -191,7 +191,8 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
             gender=gender,
             runs=runs,
             has_live_timing=bool(live_timing_url),
-            live_timing_url=live_timing_url
+            live_timing_url=live_timing_url,
+            results=await scrape_results(race_id, session)
         ))
 
     # Parse technical delegates
@@ -245,6 +246,59 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
         broadcasters=broadcasters,
         documents=documents
     )
+
+async def scrape_results(race_id: str, session: Optional[aiohttp.ClientSession] = None) -> List[models.Result]:
+    """Fetch and parse results for a specific race"""
+    url = f"{BASE_URL}/DB/general/results.html?sectorcode=AL&raceid={race_id}"
+    html = await get_page_content(url, session)
+    soup = BeautifulSoup(html, 'html.parser')
+
+    # Parse results
+    result_rows = soup.select('#events-info-results > .tbody > .table-row')
+
+    if not result_rows or len(result_rows) < 2:
+        return None
+
+    results = []
+
+    for row in result_rows:
+        cols = row.select('.g-row > .g-row > div')
+        if len(cols) < 7:
+            continue
+
+        athlete_id = re.search(r'competitorid=(\d+)', row['href']).group(1) if re.search(r'competitorid=(\d+)', row['href']) else None
+        rank = int(cols[0].text.strip())
+        name = cols[3].text.strip()
+        nation = cols[5].select_one('.country__name-short').text.strip()
+        run1 = cols[6].text.strip()
+        run2 = cols[7].text.strip()
+        total = cols[8].text.strip()
+        diff = cols[9].text.strip() if len(cols) > 8 else None
+        fis_points = float(cols[10].text.strip()) if len(cols) > 9 else None
+        cup_points = int(cols[11].text.strip()) if len(cols) > 10 else None
+
+        results.append(models.Result(
+            athlete_id=athlete_id,
+            rank=rank,
+            name=name,
+            nation=nation,
+            run1=run1,
+            run2=run2,
+            total=total,
+            diff=diff,
+            fis_points=fis_points,
+            cup_points=cup_points
+        ))
+
+    return results
+
+def parse_time(time_str: str) -> Optional[datetime.time]:
+    """Parse a time string like "1:23.45" into a time object"""
+    try:
+        minutes, seconds = map(int, time_str.split(':'))
+        return datetime.time(minutes, seconds)
+    except ValueError:
+        return None
 
 async def list_competitions(session: Optional[aiohttp.ClientSession] = None) -> List[models.Competition]:
     """Fetch and parse the full competition list"""

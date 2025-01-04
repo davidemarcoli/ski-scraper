@@ -35,6 +35,18 @@ class Run(BaseModel):
     status: Optional[str] = None  # e.g. "Official results"
     info: Optional[str] = None
 
+class Result(BaseModel):
+    athlete_id: str
+    rank: int
+    name: str
+    nation: str
+    run1: Optional[str] = None
+    run2: Optional[str] = None
+    total: Optional[str] = None
+    diff: Optional[str] = None
+    fis_points: Optional[float] = None
+    cup_points: Optional[int] = None
+
 class Race(BaseModel):
     race_id: str
     codex: str  # e.g. "5001" or "0001"
@@ -44,6 +56,7 @@ class Race(BaseModel):
     runs: List[Run]
     has_live_timing: bool = False
     live_timing_url: Optional[HttpUrl] = None
+    results: Optional[List[Result]] = None
 
 class TechnicalDelegate(BaseModel):
     codex: str
