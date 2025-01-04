@@ -12,7 +12,13 @@ uvicorn = "^0.34.0"
 beautifulsoup4 = "^4.12.3"
 requests = "^2.32.3"
 pandas = "^2.2.3"
+aiohttp = "^3.11.11"
+pydantic = "^2.10.4"
 
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.4"
+pytest-asyncio = "^0.25.1"
 
 [build-system]
 requires = ["poetry-core"]
