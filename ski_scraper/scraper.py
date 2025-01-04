@@ -124,8 +124,6 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
             codex = codex_el.select_one('.link__text').text.strip() if codex_el else None
         else:
             codex = race_row.select_one('.g-md-2').text.strip()
-
-        
         
         # Extract date
         date_el = race_row.select_one('.timezone-date')
@@ -133,17 +131,25 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
         if date_el and time_el:
             date_str = f"{date_el['data-date']} {time_el['data-time']}"
             race_date = datetime.strptime(date_str, '%Y-%m-%d %H:%M')
-        else:
-            continue
+        elif date_el:
+            date_str = date_el['data-date']
+            race_date = datetime.strptime(date_str, '%Y-%m-%d')
             
         # Extract discipline and gender
         discipline_el = race_row.select_one('.g-lg-5 .clip')
         discipline_text = discipline_el.text.strip() if discipline_el else ""
         discipline = None
         for d in models.Discipline:
-            if d.value in discipline_text.upper():
+            if d.name == discipline_text.replace(" ", "_").upper():
                 discipline = d
                 break
+
+        if not discipline:
+            logger.warning(f"Unknown discipline: {discipline_text}")
+            continue
+
+        is_training = discipline_text.endswith("Training")
+
                 
         gender_el = race_row.select_one('.gender__item')
         gender = models.Gender.WOMEN if gender_el and 'gender__item_l' in gender_el['class'] else models.Gender.MEN
@@ -151,7 +157,6 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
         # Extract runs
         runs = []
         run_element = race_row.select_one('a.hidden-xs')
-        print(run_element['href'])
         race_id = re.search(r'raceid=(\d+)', run_element['href']).group(1) if re.search(r'raceid=(\d+)', run_element['href']) else None
         
         for run_el in run_element.select('.split-row_bordered .split-row__item'):
@@ -188,6 +193,7 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
             codex=codex,
             date=race_date,
             discipline=discipline,
+            is_training=is_training,
             gender=gender,
             runs=runs,
             has_live_timing=bool(live_timing_url),

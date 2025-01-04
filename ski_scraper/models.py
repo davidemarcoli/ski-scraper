@@ -13,6 +13,10 @@ class Discipline(str, Enum):
     GIANT_SLALOM = "GS" 
     SUPER_G = "SG"
     DOWNHILL = "DH"
+    SLALOM_TRAINING = "SLT"
+    GIANT_SLALOM_TRAINING = "GST"
+    SUPER_G_TRAINING = "SGT"
+    DOWNHILL_TRAINING = "DHT"
 
 class Competition(BaseModel):
     event_id: str
@@ -52,6 +56,7 @@ class Race(BaseModel):
     codex: str  # e.g. "5001" or "0001"
     date: datetime
     discipline: Discipline
+    is_training: bool = False
     gender: Gender
     runs: List[Run]
     has_live_timing: bool = False
