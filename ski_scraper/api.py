@@ -25,6 +25,8 @@ async def get_competition(competition_id: str):
         async with aiohttp.ClientSession() as session:
             data = await scraper.scrape_competition_detail(competition_id, session=session)
         return data
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Error fetching competition details", exc_info=e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -49,6 +51,8 @@ async def list_competitions(
             competitions = [c for c in competitions if location.lower() in c.location.lower()]
             
         return competitions
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Error listing competitions", exc_info=e)
         raise HTTPException(status_code=500, detail=str(e))

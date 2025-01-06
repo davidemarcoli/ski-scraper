@@ -4,6 +4,8 @@ import aiohttp
 import asyncio
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+
+from fastapi import HTTPException
 from . import models
 import logging
 
@@ -116,6 +118,9 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
    # Parse races and their runs
     races = []
     race_rows = soup.select('#eventdetailscontent > .table-row')
+
+    if len(race_rows) == 1 and race_rows[0].text.strip() == "No competition found":
+        raise HTTPException(status_code=404, detail="Competition not found")
     
     for race_row in race_rows:
         # Extract race info
