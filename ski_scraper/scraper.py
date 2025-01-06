@@ -198,7 +198,7 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
             runs=runs,
             has_live_timing=bool(live_timing_url),
             live_timing_url=live_timing_url,
-            results=await scrape_results(race_id, session)
+            results=await scrape_results(race_id, discipline, session)
         ))
 
     # Parse technical delegates
@@ -253,7 +253,7 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
         documents=documents
     )
 
-async def scrape_results(race_id: str, session: Optional[aiohttp.ClientSession] = None) -> List[models.Result]:
+async def scrape_results(race_id: str, discipline: models.Discipline, session: Optional[aiohttp.ClientSession] = None) -> List[models.Result]:
     """Fetch and parse results for a specific race"""
     url = f"{BASE_URL}/DB/general/results.html?sectorcode=AL&raceid={race_id}"
     html = await get_page_content(url, session)
@@ -272,29 +272,47 @@ async def scrape_results(race_id: str, session: Optional[aiohttp.ClientSession] 
         if len(cols) < 7:
             continue
 
-        athlete_id = re.search(r'competitorid=(\d+)', row['href']).group(1) if re.search(r'competitorid=(\d+)', row['href']) else None
-        rank = int(cols[0].text.strip())
-        name = cols[3].text.strip()
-        nation = cols[5].select_one('.country__name-short').text.strip()
-        run1 = cols[6].text.strip()
-        run2 = cols[7].text.strip()
-        total = cols[8].text.strip()
-        diff = cols[9].text.strip() if len(cols) > 8 else None
-        fis_points = float(cols[10].text.strip()) if len(cols) > 9 else None
-        cup_points = int(cols[11].text.strip()) if len(cols) > 10 else None
+        has_two_runs = discipline in [models.Discipline.SLALOM, models.Discipline.GIANT_SLALOM]
 
-        results.append(models.Result(
-            athlete_id=athlete_id,
-            rank=rank,
-            name=name,
-            nation=nation,
-            run1=run1,
-            run2=run2,
-            total=total,
-            diff=diff,
-            fis_points=fis_points,
-            cup_points=cup_points
-        ))
+        col_indexes = {
+            'rank': 0,
+            'name': 3,
+            'nation': 5,
+            'run1': 6 if has_two_runs else None,
+            'run2': 7 if has_two_runs else None,
+            'total': 8 if has_two_runs else 6,
+            'diff': 9 if has_two_runs else 7,
+            'fis_points': 10 if has_two_runs else 8,
+            'cup_points': 11 if has_two_runs else 9
+        }
+
+        try:
+            athlete_id = re.search(r'competitorid=(\d+)', row['href']).group(1) if re.search(r'competitorid=(\d+)', row['href']) else None
+            rank = int(cols[col_indexes['rank']].text.strip())
+            name = cols[col_indexes['name']].text.strip()
+            nation = cols[col_indexes['nation']].select_one('.country__name-short').text.strip()
+            run1 = cols[col_indexes['run1']].text.strip() if col_indexes['run1'] else None
+            run2 = cols[col_indexes['run2']].text.strip() if col_indexes['run2'] else None
+            total = cols[col_indexes['total']].text.strip()
+            diff = cols[col_indexes['diff']].text.strip()
+            fis_points = float(cols[col_indexes['fis_points']].text.strip() or 0)
+            cup_points = int(cols[col_indexes['cup_points']].text.strip() or 0)
+
+            results.append(models.Result(
+                athlete_id=athlete_id,
+                rank=rank,
+                name=name,
+                nation=nation,
+                run1=run1,
+                run2=run2,
+                total=total,
+                diff=diff,
+                fis_points=fis_points,
+                cup_points=cup_points
+            ))
+        except Exception as e:
+            logger.error(f"Error parsing result row of race at url {url}: {e}")
+            continue
 
     return results
 
