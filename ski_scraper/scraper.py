@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.fis-ski.com"
-CALENDAR_URL = f"{BASE_URL}/DB/alpine-skiing/calendar-results.html?eventselection=&place=&sectorcode=AL&seasoncode=&categorycode=WC&disciplinecode=&gendercode=&racedate=&racecodex=&nationcode=&seasonmonth=&saveselection=-1&seasonselection=2025"
+CALENDAR_URL = f"{BASE_URL}/DB/alpine-skiing/calendar-results.html?sectorcode=AL&categorycode=WC"
 
 async def get_page_content(url: str, session: Optional[aiohttp.ClientSession] = None) -> str:
     """Fetch a page with error handling and retries"""
