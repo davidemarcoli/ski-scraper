@@ -203,7 +203,7 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
             runs=runs,
             has_live_timing=bool(live_timing_url),
             live_timing_url=live_timing_url,
-            results=await scrape_results(race_id, discipline, session)
+            results=await scrape_results(race_id, discipline, session) if not is_training else None
         ))
 
     # Parse technical delegates
@@ -294,7 +294,7 @@ async def scrape_results(race_id: str, discipline: models.Discipline, session: O
         try:
             athlete_id = re.search(r'competitorid=(\d+)', row['href']).group(1) if re.search(r'competitorid=(\d+)', row['href']) else None
             rank = int(cols[col_indexes['rank']].text.strip())
-            name = cols[col_indexes['name']].text.strip()
+            name = cols[col_indexes['name']].select_one('.athlete-name').text.strip()
             nation = cols[col_indexes['nation']].select_one('.country__name-short').text.strip()
             run1 = cols[col_indexes['run1']].text.strip() if col_indexes['run1'] else None
             run2 = cols[col_indexes['run2']].text.strip() if col_indexes['run2'] else None
