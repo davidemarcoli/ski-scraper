@@ -17,6 +17,8 @@ class Discipline(str, Enum):
     GIANT_SLALOM_TRAINING = "GST"
     SUPER_G_TRAINING = "SGT"
     DOWNHILL_TRAINING = "DHT"
+    TEAM_COMBINED = "TC"
+    TEAM_PARALLEL = "TP"
 
 class Competition(BaseModel):
     event_id: str

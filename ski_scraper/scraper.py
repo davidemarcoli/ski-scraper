@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.fis-ski.com"
-CALENDAR_URL = f"{BASE_URL}/DB/alpine-skiing/calendar-results.html?sectorcode=AL&categorycode=WC"
+BASE_CALENDAR_URL = f"{BASE_URL}/DB/alpine-skiing/calendar-results.html?sectorcode=AL&categorycode="
 
 async def get_page_content(url: str, session: Optional[aiohttp.ClientSession] = None) -> str:
     """Fetch a page with error handling and retries"""
@@ -250,6 +250,17 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
     all_competitions = await list_competitions(session)
     competition = next((c for c in all_competitions if c.event_id == competition_id), None)
 
+    if not competition:
+        logger.debug(f"Competition not found in list: {competition_id}, trying World Championships next")
+        all_competitions = await list_competitions(session, category="WSC")
+        competition = next((c for c in all_competitions if c.event_id == competition_id), None)
+    if not competition:
+        logger.error(f"Competition not found in list: {competition_id}, trying Winter Olympics next")
+        all_competitions = await list_competitions(session, category="OWG")
+        competition = next((c for c in all_competitions if c.event_id == competition_id), None)
+    if not competition:
+        raise HTTPException(status_code=404, detail="Competition not found")
+
     return models.CompetitionDetail(
         competition=competition, #extract_base_competition(soup),  # You'll need to implement this
         races=races,
@@ -258,8 +269,12 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
         documents=documents
     )
 
-async def scrape_results(race_id: str, discipline: models.Discipline, session: Optional[aiohttp.ClientSession] = None) -> List[models.Result]:
+async def scrape_results(race_id: str, discipline: models.Discipline, session: Optional[aiohttp.ClientSession] = None) -> List[models.Result]:    
     """Fetch and parse results for a specific race"""
+
+    if discipline in [models.Discipline.TEAM_COMBINED, models.Discipline.TEAM_PARALLEL]:
+        return None
+
     url = f"{BASE_URL}/DB/general/results.html?sectorcode=AL&raceid={race_id}"
     html = await get_page_content(url, session)
     soup = BeautifulSoup(html, 'html.parser')
@@ -288,7 +303,7 @@ async def scrape_results(race_id: str, discipline: models.Discipline, session: O
             'total': 8 if has_two_runs else 6,
             'diff': 9 if has_two_runs else 7,
             'fis_points': 10 if has_two_runs else 8,
-            'cup_points': 11 if has_two_runs else 9
+            'cup_points': (11 if has_two_runs else 9) if len(cols) > 9 else None
         }
 
         try:
@@ -301,7 +316,7 @@ async def scrape_results(race_id: str, discipline: models.Discipline, session: O
             total = cols[col_indexes['total']].text.strip()
             diff = cols[col_indexes['diff']].text.strip()
             fis_points = float(cols[col_indexes['fis_points']].text.strip() or 0)
-            cup_points = int(cols[col_indexes['cup_points']].text.strip() or 0)
+            cup_points = int(cols[col_indexes['cup_points']].text.strip() or 0) if col_indexes['cup_points'] else None
 
             results.append(models.Result(
                 athlete_id=athlete_id,
@@ -329,9 +344,9 @@ def parse_time(time_str: str) -> Optional[datetime.time]:
     except ValueError:
         return None
 
-async def list_competitions(session: Optional[aiohttp.ClientSession] = None) -> List[models.Competition]:
+async def list_competitions(session: Optional[aiohttp.ClientSession] = None, category: str = "WC") -> List[models.Competition]:
     """Fetch and parse the full competition list"""
-    html = await get_page_content(CALENDAR_URL, session)
+    html = await get_page_content(BASE_CALENDAR_URL + category, session)
     soup = BeautifulSoup(html, 'html.parser')
     competition_rows = soup.select('.table-row')
     
