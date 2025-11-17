@@ -109,9 +109,17 @@ def parse_competition_row(row) -> models.Competition:
         logger.error(f"Error parsing competition row: {e}")
         raise
 
+def get_current_season() -> str:
+    """Get the current ski season in 'YYYY' format"""
+    now = datetime.now()
+    year = now.year
+    if now.month >= 10:  # Ski season starts in October
+        return str(year + 1)
+    return str(year)
+
 async def scrape_competition_detail(competition_id: str, session: Optional[aiohttp.ClientSession] = None) -> models.CompetitionDetail:
     """Fetch and parse details for a specific competition"""
-    url = f"{BASE_URL}/DB/general/event-details.html?sectorcode=AL&eventid={competition_id}&seasoncode=2025"
+    url = f"{BASE_URL}/DB/general/event-details.html?sectorcode=AL&eventid={competition_id}&seasoncode={get_current_season()}"
     html = await get_page_content(url, session)
     soup = BeautifulSoup(html, 'html.parser')
     
