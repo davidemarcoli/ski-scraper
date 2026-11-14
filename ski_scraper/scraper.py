@@ -109,17 +109,15 @@ def parse_competition_row(row) -> models.Competition:
         logger.error(f"Error parsing competition row: {e}")
         raise
 
-def get_current_season() -> str:
-    """Get the current ski season in 'YYYY' format"""
-    now = datetime.now()
-    year = now.year
-    if now.month >= 10:  # Ski season starts in October
-        return str(year + 1)
-    return str(year)
+def get_season(date: datetime) -> str:
+    """Get the FIS season code ('YYYY') for a date, e.g. 2026/27 -> '2027'"""
+    if date.month >= 7:  # FIS seasons run from July to June
+        return str(date.year + 1)
+    return str(date.year)
 
 async def scrape_competition_detail(competition_id: str, session: Optional[aiohttp.ClientSession] = None) -> models.CompetitionDetail:
     """Fetch and parse details for a specific competition"""
-    url = f"{BASE_URL}/DB/general/event-details.html?sectorcode=AL&eventid={competition_id}&seasoncode={get_current_season()}"
+    url = f"{BASE_URL}/DB/general/event-details.html?sectorcode=AL&eventid={competition_id}"
     html = await get_page_content(url, session)
     soup = BeautifulSoup(html, 'html.parser')
     
@@ -210,8 +208,7 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
             gender=gender,
             runs=runs,
             has_live_timing=bool(live_timing_url),
-            live_timing_url=live_timing_url,
-            results=await scrape_results(race_id, discipline, session) if not is_training else None
+            live_timing_url=live_timing_url
         ))
 
     # Parse technical delegates
@@ -255,19 +252,22 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
             documents[name] = link_el['href']
 
     # TODO: Extract base competition info without fetching all competitions
-    all_competitions = await list_competitions(session)
-    competition = next((c for c in all_competitions if c.event_id == competition_id), None)
-
-    if not competition:
-        logger.debug(f"Competition not found in list: {competition_id}, trying World Championships next")
-        all_competitions = await list_competitions(session, category="WSC")
+    # Look up the calendar of the season the races belong to, so past seasons keep working
+    season = get_season(races[0].date) if races else get_season(datetime.now())
+    competition = None
+    for category in ["WC", "WSC", "OWG"]:
+        all_competitions = await list_competitions(session, category=category, season=season)
         competition = next((c for c in all_competitions if c.event_id == competition_id), None)
-    if not competition:
-        logger.error(f"Competition not found in list: {competition_id}, trying Winter Olympics next")
-        all_competitions = await list_competitions(session, category="OWG")
-        competition = next((c for c in all_competitions if c.event_id == competition_id), None)
+        if competition:
+            break
+        logger.debug(f"Competition {competition_id} not found in {category} calendar of season {season}")
     if not competition:
         raise HTTPException(status_code=404, detail="Competition not found")
+
+    # Only fetch results once we know the competition exists
+    for race in races:
+        if not race.is_training:
+            race.results = await scrape_results(race.race_id, race.discipline, session)
 
     return models.CompetitionDetail(
         competition=competition, #extract_base_competition(soup),  # You'll need to implement this
@@ -296,7 +296,8 @@ async def scrape_results(race_id: str, discipline: models.Discipline, session: O
     results = []
 
     for row in result_rows:
-        cols = row.select('.g-row > .g-row > div')
+        # Older results pages have an extra (pale) points column, skip it to keep the indexes aligned
+        cols = [c for c in row.select('.g-row > .g-row > div') if 'pale' not in c.get('class', [])]
         if len(cols) < 7:
             continue
 
@@ -317,7 +318,9 @@ async def scrape_results(race_id: str, discipline: models.Discipline, session: O
         try:
             athlete_id = re.search(r'competitorid=(\d+)', row['href']).group(1) if re.search(r'competitorid=(\d+)', row['href']) else None
             rank = int(cols[col_indexes['rank']].text.strip())
-            name = cols[col_indexes['name']].select_one('.athlete-name').text.strip()
+            # Newer pages split the cell into athlete and brand, older ones only contain the name
+            name_el = cols[col_indexes['name']].select_one('.athlete-name') or cols[col_indexes['name']]
+            name = name_el.text.strip()
             nation = cols[col_indexes['nation']].select_one('.country__name-short').text.strip()
             run1 = cols[col_indexes['run1']].text.strip() if col_indexes['run1'] else None
             run2 = cols[col_indexes['run2']].text.strip() if col_indexes['run2'] else None
@@ -352,9 +355,12 @@ def parse_time(time_str: str) -> Optional[datetime.time]:
     except ValueError:
         return None
 
-async def list_competitions(session: Optional[aiohttp.ClientSession] = None, category: str = "WC") -> List[models.Competition]:
-    """Fetch and parse the full competition list"""
-    html = await get_page_content(BASE_CALENDAR_URL + category, session)
+async def list_competitions(session: Optional[aiohttp.ClientSession] = None, category: str = "WC", season: Optional[str] = None) -> List[models.Competition]:
+    """Fetch and parse the full competition list (defaults to the season FIS currently shows)"""
+    url = BASE_CALENDAR_URL + category
+    if season:
+        url += f"&seasoncode={season}"
+    html = await get_page_content(url, session)
     soup = BeautifulSoup(html, 'html.parser')
     competition_rows = soup.select('.table-row')
     

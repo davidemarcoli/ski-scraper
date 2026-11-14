@@ -35,12 +35,13 @@ async def get_competition(competition_id: str):
 async def list_competitions(
     gender: Optional[str] = None,
     discipline: Optional[str] = None,
-    location: Optional[str] = None
+    location: Optional[str] = None,
+    season: Optional[str] = None
 ):
     """Get list of competitions with optional filters"""
     try:
         async with aiohttp.ClientSession() as session:
-            competitions = await scraper.list_competitions(session=session)
+            competitions = await scraper.list_competitions(session=session, season=season)
         
         # Apply filters
         if gender:
