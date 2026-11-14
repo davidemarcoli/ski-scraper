@@ -176,6 +176,15 @@ def parse_competition_row(row) -> models.Competition:
         logger.error(f"Error parsing competition row: {e}")
         raise
 
+def parse_start(element) -> Optional[datetime]:
+    """Parse the timezone-aware start time FIS puts on its date/time elements"""
+    if element is None or not element.get('data-iso-date'):
+        return None
+    try:
+        return datetime.fromisoformat(element['data-iso-date'])
+    except ValueError:
+        return None
+
 def get_season(date: datetime) -> str:
     """Get the FIS season code ('YYYY') for a date, e.g. 2026/27 -> '2027'"""
     if date.month >= 7:  # FIS seasons run from July to June
@@ -206,9 +215,12 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
         # Extract date
         date_el = race_row.select_one('.timezone-date')
         time_el = race_row.select_one('.timezone-time')
+        race_start = None
+        timezone = date_el.get('data-timezone') if date_el else None
         if date_el and time_el:
             date_str = f"{date_el['data-date']} {time_el['data-time']}"
             race_date = datetime.strptime(date_str, '%Y-%m-%d %H:%M')
+            race_start = parse_start(time_el)
         elif date_el:
             date_str = date_el['data-date']
             race_date = datetime.strptime(date_str, '%Y-%m-%d')
@@ -258,6 +270,7 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
             runs.append(models.Run(
                 number=int(run_number[0]),  # Extract number from "1st", "2nd" etc
                 time=run_time,
+                start=parse_start(time_el),
                 status=status_el.text.strip() if status_el else None,
                 info=info_el.text.strip() if info_el else None
             ))
@@ -270,6 +283,8 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
             race_id=race_id,
             codex=codex,
             date=race_date,
+            start=race_start,
+            timezone=timezone,
             discipline=discipline,
             is_training=is_training,
             gender=gender,

@@ -37,7 +37,8 @@ class CompetitionList(BaseModel):
 
 class Run(BaseModel):
     number: int  # 1st, 2nd etc
-    time: time   # Start time
+    time: time   # Start time in the venue's local time
+    start: Optional[datetime] = None  # Timezone-aware start time
     status: Optional[str] = None  # e.g. "Official results"
     info: Optional[str] = None
 
@@ -56,7 +57,9 @@ class Result(BaseModel):
 class Race(BaseModel):
     race_id: str
     codex: str  # e.g. "5001" or "0001"
-    date: datetime
+    date: datetime  # In the venue's local time
+    start: Optional[datetime] = None  # Timezone-aware start time of the first run
+    timezone: Optional[str] = None  # Venue timezone, e.g. "Europe/Vienna"
     discipline: Discipline
     is_training: bool = False
     gender: Gender
