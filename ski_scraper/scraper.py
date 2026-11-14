@@ -2,7 +2,8 @@ import re
 from bs4 import BeautifulSoup
 import aiohttp
 import asyncio
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
 from fastapi import HTTPException
@@ -14,16 +15,64 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://www.fis-ski.com"
 BASE_CALENDAR_URL = f"{BASE_URL}/DB/alpine-skiing/calendar-results.html?sectorcode=AL&categorycode="
 
+# Cache TTLs in seconds. Short ones for pages that carry live data (live flag, run status, live results).
+SHORT_CACHE_TTL = 60
+FINISHED_RESULTS_CACHE_TTL = 6 * 60 * 60
+
+class RateLimiter:
+    """Token bucket: allows short bursts, then limits to `rate` requests per second"""
+
+    def __init__(self, rate: float, burst: int):
+        self.rate = rate
+        self.burst = burst
+        self.tokens = float(burst)
+        self.updated = time.monotonic()
+        self.paused_until = 0.0
+        self.lock = asyncio.Lock()
+
+    async def acquire(self):
+        async with self.lock:
+            if time.monotonic() < self.paused_until:
+                await asyncio.sleep(self.paused_until - time.monotonic())
+                self.updated = time.monotonic()
+            now = time.monotonic()
+            self.tokens = min(self.burst, self.tokens + (now - self.updated) * self.rate)
+            self.updated = now
+            if self.tokens < 1:
+                await asyncio.sleep((1 - self.tokens) / self.rate)
+                self.tokens = 1
+                self.updated = time.monotonic()
+            self.tokens -= 1
+
+    def pause(self, seconds: float):
+        """Hold back all requests, e.g. after being rate limited"""
+        self.paused_until = max(self.paused_until, time.monotonic() + seconds)
+        self.tokens = 0
+
+# FIS starts answering 429 at around 2 requests/s, so stay below that
+_rate_limiter = RateLimiter(rate=1, burst=5)
+RATE_LIMITED_PAUSE = 10  # seconds
+
+_page_cache: Dict[str, tuple[float, str]] = {}  # url -> (expires_at, html)
+_page_locks: Dict[str, asyncio.Lock] = {}
+
 async def get_page_content(url: str, session: Optional[aiohttp.ClientSession] = None) -> str:
     """Fetch a page with error handling and retries"""
     if session is None:
         async with aiohttp.ClientSession() as session:
             return await get_page_content(url, session)
-    
-    max_retries = 3
+
+    max_retries = 4
     for attempt in range(max_retries):
+        await _rate_limiter.acquire()
         try:
             async with session.get(url) as response:
+                if response.status == 429 and attempt < max_retries - 1:
+                    retry_after = response.headers.get("Retry-After", "")
+                    pause = min(int(retry_after), 60) if retry_after.isdigit() else RATE_LIMITED_PAUSE
+                    logger.warning(f"Rate limited by FIS, pausing all requests for {pause}s: {url}")
+                    _rate_limiter.pause(pause)
+                    continue  # the rate limiter waits before the retry
                 response.raise_for_status()
                 return await response.text()
         except aiohttp.ClientError as e:
@@ -31,6 +80,24 @@ async def get_page_content(url: str, session: Optional[aiohttp.ClientSession] = 
                 raise
             logger.warning(f"Retry {attempt + 1} after error: {e}")
             await asyncio.sleep(1 * (attempt + 1))
+
+async def get_cached_page_content(url: str, session: Optional[aiohttp.ClientSession] = None, ttl: float = SHORT_CACHE_TTL) -> str:
+    """Fetch a page, reusing a cached copy for ttl seconds. Concurrent callers share a single fetch."""
+    lock = _page_locks.setdefault(url, asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        cached = _page_cache.get(url)
+        if cached and now < cached[0]:
+            return cached[1]
+        html = await get_page_content(url, session)
+
+        # Drop expired entries so the cache doesn't grow forever
+        for key in [k for k, (expires_at, _) in _page_cache.items() if expires_at <= now]:
+            del _page_cache[key]
+            if not _page_locks[key].locked():
+                del _page_locks[key]
+        _page_cache[url] = (now + ttl, html)
+        return html
 
 def parse_disciplines(text: str) -> List[models.Discipline]:
     """Parse discipline string into list of disciplines"""
@@ -118,7 +185,7 @@ def get_season(date: datetime) -> str:
 async def scrape_competition_detail(competition_id: str, session: Optional[aiohttp.ClientSession] = None) -> models.CompetitionDetail:
     """Fetch and parse details for a specific competition"""
     url = f"{BASE_URL}/DB/general/event-details.html?sectorcode=AL&eventid={competition_id}"
-    html = await get_page_content(url, session)
+    html = await get_cached_page_content(url, session)
     soup = BeautifulSoup(html, 'html.parser')
     
    # Parse races and their runs
@@ -266,8 +333,13 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
 
     # Only fetch results once we know the competition exists
     for race in races:
-        if not race.is_training:
-            race.results = await scrape_results(race.race_id, race.discipline, session)
+        # Races that haven't started yet have no results (12h margin for timezone differences)
+        if not race.is_training and race.date < datetime.now() + timedelta(hours=12):
+            # Results of finished races don't change anymore, so they can be cached much longer
+            is_official = bool(race.runs) and all(run.status == "Official results" for run in race.runs)
+            is_finished = is_official or race.date < datetime.now() - timedelta(days=2)
+            cache_ttl = FINISHED_RESULTS_CACHE_TTL if is_finished else SHORT_CACHE_TTL
+            race.results = await scrape_results(race.race_id, race.discipline, session, cache_ttl)
 
     return models.CompetitionDetail(
         competition=competition, #extract_base_competition(soup),  # You'll need to implement this
@@ -277,14 +349,14 @@ async def scrape_competition_detail(competition_id: str, session: Optional[aioht
         documents=documents
     )
 
-async def scrape_results(race_id: str, discipline: models.Discipline, session: Optional[aiohttp.ClientSession] = None) -> List[models.Result]:    
+async def scrape_results(race_id: str, discipline: models.Discipline, session: Optional[aiohttp.ClientSession] = None, cache_ttl: float = SHORT_CACHE_TTL) -> List[models.Result]:    
     """Fetch and parse results for a specific race"""
 
     if discipline in [models.Discipline.TEAM_COMBINED, models.Discipline.TEAM_PARALLEL]:
         return None
 
     url = f"{BASE_URL}/DB/general/results.html?sectorcode=AL&raceid={race_id}"
-    html = await get_page_content(url, session)
+    html = await get_cached_page_content(url, session, cache_ttl)
     soup = BeautifulSoup(html, 'html.parser')
 
     # Parse results
@@ -360,7 +432,7 @@ async def list_competitions(session: Optional[aiohttp.ClientSession] = None, cat
     url = BASE_CALENDAR_URL + category
     if season:
         url += f"&seasoncode={season}"
-    html = await get_page_content(url, session)
+    html = await get_cached_page_content(url, session)
     soup = BeautifulSoup(html, 'html.parser')
     competition_rows = soup.select('.table-row')
     
